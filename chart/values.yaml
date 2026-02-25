@@ -1,0 +1,60 @@
+namespace: cisco-aps
+
+api:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/hacking-robots-and-beer/cisco/api
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+  # Set hostNetwork: true if APs are on the node's physical LAN and not reachable from pod CIDR
+  hostNetwork: false
+
+ui:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/hacking-robots-and-beer/cisco/ui
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    port: 3000
+  env:
+    NEXT_PUBLIC_API_URL: https://cisco-aps.example.com
+
+postgres:
+  replicaCount: 1
+  image:
+    repository: postgres
+    tag: 16-alpine
+    pullPolicy: IfNotPresent
+  service:
+    port: 5432
+  persistence:
+    size: 2Gi
+    storageClass: ""
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    cert-manager.io/cluster-issuer: http
+    acme.cert-manager.io/http01-edit-in-place: "true"
+    kubernetes.io/ingress.class: traefik
+    kubernetes.io/tls-acme: "true"
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure,web
+  hosts:
+    - cisco-aps.example.com
+  tls:
+    - secretName: cisco-aps-tls
+      hosts:
+        - cisco-aps.example.com
+
+secret:
+  POSTGRES_USER: cisco
+  POSTGRES_PASSWORD: changeme
+  POSTGRES_DB: cisco
+  DATABASE_URL: postgres://cisco:changeme@cisco-aps-postgres:5432/cisco?sslmode=disable
+  ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+
+imagePullSecrets: []

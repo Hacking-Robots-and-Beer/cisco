@@ -1,0 +1,27 @@
+# Go
+api/bin/
+api/vendor/
+
+# Node
+ui/node_modules/
+ui/.next/
+ui/.env.local
+ui/.env.*.local
+
+# Environment
+.env
+.env.local
+*.env
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml

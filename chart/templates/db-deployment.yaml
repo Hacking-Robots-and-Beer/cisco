@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cisco-aps-postgres
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "cisco.labels" . | nindent 4 }}
+    app.kubernetes.io/name: postgres
+spec:
+  replicas: {{ .Values.postgres.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "cisco.selectorLabels" "postgres" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cisco.selectorLabels" "postgres" | nindent 8 }}
+    spec:
+      containers:
+        - name: postgres
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          ports:
+            - containerPort: 5432
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: cisco-aps-secret
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+              subPath: data
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.secret.POSTGRES_USER | default "cisco" }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.secret.POSTGRES_USER | default "cisco" }}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: cisco-aps-postgres

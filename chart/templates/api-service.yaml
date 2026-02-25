@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cisco-aps-api
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "cisco.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "cisco.selectorLabels" "api" | nindent 4 }}
+  ports:
+    - port: {{ .Values.api.service.port }}
+      targetPort: 8080
+      protocol: TCP

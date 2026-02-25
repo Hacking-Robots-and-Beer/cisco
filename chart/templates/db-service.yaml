@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cisco-aps-postgres
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "cisco.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "cisco.selectorLabels" "postgres" | nindent 4 }}
+  ports:
+    - port: {{ .Values.postgres.service.port }}
+      targetPort: 5432
+      protocol: TCP
