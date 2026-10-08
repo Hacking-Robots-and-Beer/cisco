@@ -1,213 +1,310 @@
-# Cisco AIR-CAP2602 — Lightweight to Autonomous IOS Conversion
+# From a lightweight Cisco AP to a managed autonomous AP
 
-## Overview
+This guide covers the whole process, from a factory-lightweight (CAPWAP) Cisco AP that does
+nothing without a WLC to an AP that runs autonomous IOS and is managed by this controller's GUI.
 
-Cisco AIR-CAP2602 access points ship in **lightweight (CAPWAP)** mode, designed to be managed by a Wireless LAN Controller (WLC). This guide converts them to **autonomous IOS** mode so they can be managed independently via SSH.
+1. [Identify the AP](#1-identify-the-ap)
+2. [Get the firmware](#2-get-the-firmware)
+3. [Build an isolated recovery network](#3-build-an-isolated-recovery-network)
+4. [Run the TFTP server](#4-run-the-tftp-server)
+5. [Flash the AP with the MODE button](#5-flash-the-ap-with-the-mode-button)
+6. [First login and hardening](#6-first-login-and-hardening)
+7. [Run the controller and add the AP](#7-run-the-controller-and-add-the-ap)
+8. [Troubleshooting](#8-troubleshooting)
 
-**Target firmware:** `ap3g2-k9w7-tar.153-3.JF11.tar`
+Tested on 2026-10-07 with two APs:
+
+| AP | Before | After | Flash time |
+|---|---|---|---|
+| AIR-CAP2602I-E-K9 | AP3G2-K9W8-M 15.3(3)JC15 (lightweight) | AP3G2-K9W7-M 15.3(3)JF12, AIR-SAP2602I-E-K9 | ~21 min |
+| AIR-CAP2702I-Z-K9 | lightweight | AP3G2-K9W7-M 15.3(3)JF12, AIR-SAP2702I-Z-K9 | ~13 min |
 
 ---
 
-## Method 1: MODE Button (No WLC Required)
+## 1. Identify the AP
 
-Use this method when the AP has never been registered with a WLC, or when the WLC is unavailable.
+Plug the AP into any switch port with DHCP and PoE. It gets an address, but every management port
+(22, 23, 80, 443) refuses connections. A lightweight AP only broadcasts discovery for a WLC.
 
-### Prerequisites
+Read what it runs from CDP on your switch or router. On RouterOS that is `/ip neighbor print detail`.
 
-- TFTP server running on a machine at **10.0.0.2** (or any address reachable from 10.0.0.0/24)
-- Rename the firmware image to `ap3g2-k9w7-tar.default` on your TFTP server
-- Connect a laptop directly to the AP's Ethernet port with a static IP of **10.0.0.2/24**
+| CDP field | Lightweight (needs this guide) | Autonomous (ready for the controller) |
+|---|---|---|
+| platform | `AIR-CAP2602I-…` (**C**AP) | `AIR-SAP2602I-…` (**S**AP) |
+| version | `AP3G2-K9W8-M …JC…` (**K9W8**) | `AP3G2-K9W7-M …JF…` (**K9W7**) |
 
-### Procedure
+Note the AP's MAC address. You need it to find the AP's DHCP lease after the flash.
 
-1. **Power off** the AP.
+## 2. Get the firmware
 
-2. While holding the **MODE button** on the back of the AP, apply power.
+The 1700, 2600, 2700 and 3600/3700 series all use the same **`ap3g2`** image family. We used:
 
-3. Hold the MODE button for **20–30 seconds** until the LED turns **red**, then release.
-   - The AP boots into ROMMON mode with IP **10.0.0.1**.
+| File | Size | MD5 | SHA-256 |
+|---|---|---|---|
+| `ap3g2-k9w7-tar.153-3.JF12.tar` | 13,864,960 B | `c13ca4c7bde027509e128eccf2597887` | `6a1bac2d2f506fbb4e317c5e5ea7e7c3a9418c4a7f82a7fbe68af6b7a0d24125` |
 
-4. Verify connectivity from your TFTP server machine:
-   ```
-   ping 10.0.0.1
-   ```
+The image is Cisco-licensed software and is **not** in this repository. Get it from
+[Cisco Software Download](https://software.cisco.com/download/) (requires a Cisco account), then check it
+against the checksums above. `k9w7` is autonomous; `k9w8` is lightweight. Make sure you have `k9w7`.
 
-5. The AP will automatically download `ap3g2-k9w7-tar.default` from the TFTP server at **10.0.0.2** and flash it.
-   - LED cycles through colours during the process (~5–10 minutes)
-   - AP reboots automatically when complete
-
-6. After reboot, the AP starts in autonomous IOS mode. Default login:
-   - Username: `Cisco`
-   - Password: `Cisco`
-
-### TFTP Server Setup (Linux)
+ROMMON asks for one fixed filename, so copy the tar under that name:
 
 ```bash
-# Install tftpd-hpa
-sudo apt install tftpd-hpa
-
-# Copy firmware
-sudo cp ap3g2-k9w7-tar.153-3.JF11.tar /srv/tftp/ap3g2-k9w7-tar.default
-sudo chmod 644 /srv/tftp/ap3g2-k9w7-tar.default
-
-# Start service
-sudo systemctl start tftpd-hpa
-sudo systemctl enable tftpd-hpa
+cp ap3g2-k9w7-tar.153-3.JF12.tar recovery/tftp/ap3g2-k9w7-tar.default
+md5sum recovery/tftp/ap3g2-k9w7-tar.default
 ```
 
----
+`.gitignore` excludes `recovery/tftp/*`, so the image can't be committed by accident.
 
-## Method 2: Via WLC CLI
+## 3. Build an isolated recovery network
 
-Use this method if the AP is currently registered to a Cisco WLC.
+In MODE-button recovery the AP **always** takes `10.0.0.1/24` and asks for the image from **`10.0.0.2`**.
+You can't change these addresses. If `10.0.0.1` is already a router on your network, which is common,
+the recovery must run on a separate layer-2 segment. Choose one:
 
-### Procedure
-
-1. SSH into the WLC:
-   ```
-   ssh admin@<wlc-ip>
-   ```
-
-2. Find the AP name:
-   ```
-   (WLC)> show ap summary
-   ```
-
-3. Download the autonomous firmware directly from the AP:
-   ```
-   (WLC)> config ap tftp-downgrade <tftp-server-ip> ap3g2-k9w7-tar.153-3.JF11.tar <ap-name>
-   ```
-
-4. Wait for the AP to reboot (~10 minutes). It will come back in autonomous mode.
-
-**Alternative — from the AP itself via WLC console:**
-```
-(WLC)> debug ap enable <ap-name>
-(WLC)> debug ap command "archive download-sw /force-reload /overwrite tftp://<tftp-server>/ap3g2-k9w7-tar.153-3.JF11.tar" <ap-name>
-```
-
----
-
-## Post-Conversion Initial Configuration
-
-After converting to autonomous mode, connect via console or Telnet (default) and apply this initial config:
+- **Simplest:** connect the AP to the TFTP host with a direct cable or a dumb switch, using a PoE
+  injector if needed. Give the host `10.0.0.2/24` and skip to step 4.
+- **What we did:** add a dedicated VLAN on the switch. One switch port becomes the "recovery port", and the
+  TFTP server runs in Docker on a normal LAN host, tagged into that VLAN. You don't need a spare NIC,
+  router changes or sudo.
 
 ```
-! Enable SSH (disable Telnet)
+ AP (10.0.0.1) ──untagged── switch port ether13 [VLAN 99]
+                                    │ tagged VLAN 99
+                             trunk to the host
+                                    │
+                 host eno1 ── eno1.99 (made by dockerd) ── macvlan ── container cisco-tftp (10.0.0.2)
+```
+
+### Switch (MikroTik RouterOS 7, VLAN-filtering bridge)
+
+`ether13` is the AP port and `sfp-sfpplus4` is the uplink toward the TFTP host. Replace these with your own
+port names. Take a backup first.
+
+```routeros
+/system backup save name=pre-ap-recovery
+/interface bridge vlan add bridge=bridge vlan-ids=99 untagged=ether13 tagged=sfp-sfpplus4,bridge \
+    comment="AP recovery VLAN"
+/interface bridge port set [find interface=ether13] pvid=99
+```
+
+If `ether13` is also listed as `untagged` in another VLAN, for example your IoT VLAN, remove it there.
+Use `find vlan-ids=11 dynamic=no`, because a plain `vlan-ids=11` also matches the dynamic pvid entry and
+fails with "invalid internal item number".
+
+A switch between that uplink and the host must pass VLAN 99 through. A MikroTik CSS610 with its ports in
+"optional" VLAN mode does this without changes.
+
+### Host (Linux + Docker)
+
+A macvlan network with a dotted parent makes dockerd create the VLAN sub-interface itself:
+
+```bash
+docker network create -d macvlan --subnet 10.0.0.0/24 -o parent=eno1.99 cisco-recovery
+```
+
+Replace `eno1` with the host NIC that carries the tagged VLAN. Note that a macvlan container can't reach
+its own host, but that isn't needed here.
+
+### Undo afterwards
+
+To turn the port back into a normal access port, for example VLAN 11:
+
+```routeros
+/interface bridge port set [find interface=ether13] pvid=11
+:local v [/interface bridge vlan find vlan-ids=11 dynamic=no]
+/interface bridge vlan set $v untagged=([/interface bridge vlan get $v untagged], "ether13")
+/interface bridge vlan remove [find vlan-ids=99]
+```
+
+To flash more APs later, run the three switch commands above again. The host side can stay as it is.
+
+## 4. Run the TFTP server
+
+```bash
+cd recovery
+docker compose up -d
+docker logs -f cisco-tftp       # "listening on :69, serving /srv/tftp"
+```
+
+This runs `recovery/tftp_server.py`, a small read-only TFTP server, at `10.0.0.2`.
+**Don't swap in `tftpd-hpa` or another standard server.** The AP3G2 ROMMON TFTP client is broken in two ways:
+
+1. **It broadcasts its ACKs.** The read request goes to `255.255.255.255:69`, which is fine. After that,
+   every ACK also goes to `255.255.255.255:<server port>` instead of to the server. `tftpd-hpa` binds its
+   transfer socket to `10.0.0.2`, so the kernel never delivers those ACKs and the transfer stalls on
+   block 1 every time. A longer timeout doesn't help. `tftp_server.py` binds its transfer sockets to
+   `0.0.0.0` and so receives them.
+2. **It loses data packets.** When it misses a block, it re-ACKs the previous block every 5 s for about
+   30 s and then aborts. `tftp_server.py` resends as soon as it sees such a duplicate ACK, and uses a
+   fixed per-packet deadline so the repeated ACKs can't keep resetting its timeout. Expect roughly 50 to
+   100 resends per flash; they're normal.
+
+ROMMON also goes silent for **about 30 seconds after block 1** while it erases flash. That's expected too.
+
+You can test the server from another container on the same network before you involve an AP:
+
+```bash
+# The recovery network has no internet, so build the client image first
+printf 'FROM alpine:3.20\nRUN apk add --no-cache tftp-hpa\n' | docker build -q -t tftp-client -
+docker run --rm --network cisco-recovery --ip 10.0.0.3 tftp-client \
+  sh -c 'cd /tmp && tftp -m binary 10.0.0.2 -c get ap3g2-k9w7-tar.default && md5sum ap3g2-k9w7-tar.default'
+# expect: c13ca4c7bde027509e128eccf2597887
+```
+
+The standard client ACKs normally, so this test checks the file and the network path but not the broadcast-ACK
+handling.
+
+## 5. Flash the AP with the MODE button
+
+1. Plug the AP into the recovery port, using PoE from the switch.
+2. **Remove power.** Hold the **MODE** button and restore power. With PoE, disable and re-enable the port
+   (`/interface ethernet poe set ether13 poe-out=off`, then `=auto-on`), or unplug the cable.
+3. Keep holding until the status LED turns **red** (about 20 to 30 s), then release.
+4. Watch the server:
+
+   ```
+   10.0.0.1:1024 RRQ ap3g2-k9w7-tar.default (13864960 bytes)
+   10.0.0.1: duplicate ACK on block 463, resend 1        <- normal
+   10.0.0.1: 7% (2000 blocks)
+   ...
+   10.0.0.1: DONE, sent 13864960 bytes in 27081 blocks
+   ```
+
+5. The download takes 10 to 25 minutes at about 9 KB/s. After `DONE`, the AP writes flash and reboots on
+   its own, which takes a few more minutes. **Don't remove power during this time.**
+6. Check the result: CDP now reports `AP3G2-K9W7-M` and a **SAP** platform, and the hostname is `ap`.
+
+If no RRQ appears, the AP didn't enter recovery or can't reach the server. See
+[Troubleshooting](#8-troubleshooting).
+
+## 6. First login and hardening
+
+Move the AP to the network it will live on, such as a normal access VLAN with DHCP. Find it by its MAC
+address in the DHCP leases. The factory login is user `Cisco`, password `Cisco`, enable password `Cisco`,
+over **telnet**, since SSH isn't set up yet.
+
+**Step 1:** set a name, add an admin user and enable SSH, while telnet still works:
+
+```
 configure terminal
-
-! Set hostname
-hostname AP-Office-1
-
-! Configure management interface with static IP
-interface BVI1
- ip address 192.168.1.10 255.255.255.0
- no shutdown
-
-! Default gateway
-ip default-gateway 192.168.1.1
-
-! Create local user
+hostname AP-Garage
+ip domain-name example.lan
 username admin privilege 15 secret 0 <strong-password>
-
-! Enable SSH v2
-ip domain-name local.lan
-crypto key generate rsa modulus 2048
+enable secret 0 <strong-password>
+crypto key generate rsa general-keys modulus 2048
 ip ssh version 2
 ip ssh time-out 60
 ip ssh authentication-retries 3
-
-! Disable Telnet on vty lines (SSH only)
 line vty 0 4
- transport input ssh
  login local
-
-! Disable HTTP server (use SSH only)
-no ip http server
-no ip http secure-server
-
-! Save configuration
+ transport input ssh telnet
+ exit
 end
 write memory
 ```
 
-### Verify SSH Access
+The user **must be `privilege 15`**. The controller expects to land straight at the `#` prompt.
 
-From your management machine:
-```bash
-ssh admin@192.168.1.10
-```
-
-Expected prompt:
-```
-AP-Office-1#
-```
-
----
-
-## Initial SSID Configuration (Autonomous Mode)
-
-Example: Create a WPA2-PSK SSID on both 2.4 GHz and 5 GHz radios.
+**Step 2:** log in over SSH as `admin`, then lock the AP down:
 
 ```
 configure terminal
-
-! Define SSID
-dot11 ssid MyNetwork
- vlan 1
- authentication open
- authentication key-management wpa version 2
- wpa-psk ascii MySecurePassphrase
-
-! Apply to 2.4 GHz radio (Radio 0)
-interface Dot11Radio0
- ssid MyNetwork
- no shutdown
-
-! Apply to 5 GHz radio (Radio 1)
-interface Dot11Radio1
- ssid MyNetwork
- no shutdown
-
+no username Cisco
+no ip http server
+no ip http secure-server
+line vty 0 4
+ transport input ssh
+ exit
 end
 write memory
 ```
 
----
+⚠️ `no username Cisco` asks `[confirm]`. If you paste or script these lines, the next line becomes the
+answer to that prompt and is lost. Answer the prompt with Enter before you send anything else.
 
-## Useful Show Commands
-
-```
-show version                          # Firmware version, uptime
-show running-config                   # Full running config
-show dot11 associations               # Connected clients
-show interfaces dot11Radio 0          # 2.4 GHz radio status (channel, power)
-show interfaces dot11Radio 1          # 5 GHz radio status
-show ip interface brief               # IP addresses
-show dot11 network-map                # Nearby APs (site survey)
-```
-
----
-
-## Reverting to Lightweight Mode
-
-To convert back to CAPWAP/lightweight mode (for use with a WLC):
+OpenSSH needs legacy algorithms for IOS 15.3. The controller's Go client doesn't.
 
 ```bash
-# Download the lightweight firmware via TFTP
-archive download-sw /force-reload /overwrite tftp://<tftp-server>/ap3g2-k9w8-tar.153-3.JF11.tar
+ssh -o HostKeyAlgorithms=+ssh-rsa -o KexAlgorithms=+diffie-hellman-group14-sha1 admin@<ap-ip>
 ```
 
-Note: `k9w8` = lightweight (CAPWAP), `k9w7` = autonomous.
+The radios stay **administratively down** until an SSID is configured. That's normal, and the controller
+brings them up when it pushes the first SSID.
 
----
+Reserve the AP's address on your DHCP server. The controller connects to the address you register.
 
-## Troubleshooting
+## 7. Run the controller and add the AP
+
+### Start it
+
+`docker-compose.yml` works as-is for a quick try, using a dev encryption key and UI on port 3000. For real
+use, keep secrets out of the repo with an override file:
+
+```bash
+openssl rand -hex 32 > ~/.config/cisco-ap/encryption.key && chmod 600 ~/.config/cisco-ap/encryption.key
+
+cat > ~/.config/cisco-ap/compose.override.yml <<EOF
+services:
+  postgres:
+    ports: !reset []              # don't publish the database
+  api:
+    environment:
+      ENCRYPTION_KEY: "$(cat ~/.config/cisco-ap/encryption.key)"
+  ui:
+    ports: !override ["3090:3000"]  # if 3000 is taken
+EOF
+chmod 600 ~/.config/cisco-ap/compose.override.yml
+
+docker compose -p cisco-aps -f docker-compose.yml -f ~/.config/cisco-ap/compose.override.yml up -d --build
+```
+
+- UI: http://localhost:3090, or :3000 without the override
+- API: http://localhost:8080/healthz
+
+The `ENCRYPTION_KEY` encrypts the AP passwords stored in Postgres. If you lose it, you'll have to
+re-enter every AP password. The host running the API must be able to reach the APs on TCP/22.
+
+### Add the AP
+
+In the GUI, click **Add AP** and enter a name, the AP's IP, port 22, `admin` and its password.
+Or use the API:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/aps -H "Content-Type: application/json" \
+  -d '{"name":"AP-Garage","hostname":"10.100.0.39","ssh_port":22,"username":"admin","password":"<ap-password>"}'
+```
+
+Within 30 s the reconciler logs in, and the AP shows **online** with the model and firmware it read
+(for example `AIR-SAP2602I-E-K9`, `15.3(3)JF12`). From there you can manage SSIDs, radios and clients in
+the GUI. See the [README](../README.md) for the API.
+
+## 8. Troubleshooting
 
 | Symptom | Cause | Fix |
-|---------|-------|-----|
-| AP doesn't enter ROMMON | MODE button released too early | Hold until LED is red (>20s) |
-| TFTP transfer fails | Firewall blocking UDP/69 | Open port 69 UDP on TFTP server host |
-| SSH connection refused | SSH not configured | Use console cable, configure SSH |
-| `crypto key generate rsa` fails | Hostname/domain not set | Set `hostname` and `ip domain-name` first |
-| AP loops rebooting after flash | Wrong firmware file | Verify `k9w7` (autonomous) filename |
+|---|---|---|
+| Ports 22/23/80/443 all refused | AP is lightweight (K9W8) | This guide, from step 1 |
+| No RRQ in `docker logs cisco-tftp` | Not in recovery mode, or no L2 path | Hold MODE from power-on until the LED is red. Check that the port has pvid 99 and that VLAN 99 is tagged all the way to the host. |
+| RRQ appears, then stuck at block 1 forever | A standard TFTP server that ignores broadcast ACKs | Use `recovery/tftp_server.py` |
+| Gap of about 30 s after block 1 | ROMMON is erasing flash | Wait |
+| "duplicate ACK … resend" lines | ROMMON lost a packet | Normal; the server recovers |
+| "giving up at block N" | No ACK for 2 minutes | Power-cycle and repeat step 5; the transfer starts over |
+| Login prompt eats a command | `[confirm]` after `no username Cisco` | Answer it with Enter first |
+| SSH: "no matching host key type" | OpenSSH vs. old IOS | Add `-o HostKeyAlgorithms=+ssh-rsa -o KexAlgorithms=+diffie-hellman-group14-sha1` |
+| `crypto key generate rsa` fails | No hostname or domain set | Set `hostname` and `ip domain-name` first |
+| Controller shows the AP as error / timeout at prompt | User isn't privilege 15 | `username admin privilege 15 …` |
+| GUI says "fetch failed" | UI container can't reach the API | `API_INTERNAL_URL` must point to the API service (`http://api:8080` in compose) |
+
+To debug the transfer at packet level, capture inside the TFTP container's network namespace (no sudo needed):
+
+```bash
+docker run --rm --net container:cisco-tftp nicolaka/netshoot tcpdump -U -n -e -i eth0 udp
+```
+
+### Reverting to lightweight
+
+Run this on the autonomous AP, with a `k9w8` image on a reachable TFTP server:
+
+```
+archive download-sw /force-reload /overwrite tftp://<server>/ap3g2-k9w8-tar.153-3.JF12.tar
+```

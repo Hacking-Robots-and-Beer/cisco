@@ -1,6 +1,6 @@
 # Cisco AP Controller
 
-Centralized controller for **Cisco AIR-CAP2602** access points running in autonomous (standalone) IOS mode. Replaces a Cisco WLC by SSH-ing into each AP and managing them via the IOS CLI.
+Centralized controller for **Cisco AIR-CAP2602 / 2702** (and other `ap3g2` family) access points running in autonomous (standalone) IOS mode. Replaces a Cisco WLC by SSH-ing into each AP and managing them via the IOS CLI.
 
 ## Architecture
 
@@ -21,9 +21,12 @@ The **reconciler** runs in the background inside the API pod, connecting to each
 
 ## Prerequisites
 
-APs must be converted from lightweight (CAPWAP) to **autonomous IOS** mode before registration. See [`docs/ap-conversion.md`](docs/ap-conversion.md) for the full procedure using either the MODE button or an existing WLC.
+APs must be converted from lightweight (CAPWAP) to **autonomous IOS** mode before registration.
+[`docs/ap-conversion.md`](docs/ap-conversion.md) is the full, tested guide: firmware, an isolated
+recovery VLAN, the TFTP server in [`recovery/`](recovery/), the MODE-button flash, hardening the AP and
+adding it here.
 
-**Target firmware:** `ap3g2-k9w7-tar.153-3.JF11.tar`
+**Tested firmware:** `ap3g2-k9w7-tar.153-3.JF12.tar` (Cisco-licensed, not in this repo)
 
 ## Project Structure
 
@@ -47,7 +50,8 @@ cisco/
 │   └── Dockerfile
 ├── chart/                   # Helm chart
 ├── docs/
-│   └── ap-conversion.md     # AP firmware flash guide
+│   └── ap-conversion.md     # Lightweight AP -> managed: full guide
+├── recovery/                # TFTP server for MODE-button (ROMMON) flashing
 └── docker-compose.yml       # Local dev stack
 ```
 
@@ -62,23 +66,16 @@ cisco/
 ### Start
 
 ```bash
-cp .env.example .env
-# Edit .env — set a real ENCRYPTION_KEY (64 hex chars, 32 bytes)
-
-docker compose up
+docker compose up --build
 ```
 
 - UI: http://localhost:3000
 - API: http://localhost:8080
 - Health: http://localhost:8080/healthz
 
-### First run
-
-```bash
-# Generate a secure encryption key
-openssl rand -hex 32
-# Paste into .env as ENCRYPTION_KEY
-```
+`docker-compose.yml` uses a dev-only all-zero `ENCRYPTION_KEY`. For real use, put a key from
+`openssl rand -hex 32` in a compose override file outside the repo; see
+[docs/ap-conversion.md § 7](docs/ap-conversion.md#7-run-the-controller-and-add-the-ap).
 
 ## API Reference
 
@@ -167,6 +164,7 @@ The Go API pod must have network access to the APs' IP addresses. Options:
 | `ENCRYPTION_KEY` | 64-char hex (32 bytes) AES key for stored AP passwords | Yes |
 | `GIN_MODE` | `debug` or `release` | No (default: debug) |
 | `NEXT_PUBLIC_API_URL` | API base URL visible to the browser | Yes (UI) |
+| `API_INTERNAL_URL` | API URL used by server-side rendering inside the UI container (e.g. `http://api:8080`) | Yes (UI, when the browser URL isn't reachable from the container) |
 
 ## CI/CD
 
