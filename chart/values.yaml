@@ -21,6 +21,7 @@ ui:
     port: 3000
   env:
     NEXT_PUBLIC_API_URL: https://cisco-aps.example.com
+    API_INTERNAL_URL: http://cisco-aps-api:8080
 
 postgres:
   replicaCount: 1

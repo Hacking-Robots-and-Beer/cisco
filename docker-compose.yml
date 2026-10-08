@@ -23,7 +23,7 @@ services:
       - "8080:8080"
     environment:
       DATABASE_URL: postgres://cisco:changeme@postgres:5432/cisco?sslmode=disable
-      ENCRYPTION_KEY: "00000000000000000000000000000000"
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"  # dev only, 64 hex chars
       GIN_MODE: debug
     depends_on:
       postgres:
@@ -37,6 +37,7 @@ services:
       - "3000:3000"
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8080
+      API_INTERNAL_URL: http://api:8080
     depends_on:
       - api
 

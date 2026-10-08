@@ -1,4 +1,9 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
+// Server components fetch from inside the UI container, where the browser-facing
+// URL (localhost / public ingress) does not reach the API — use the internal one.
+const API_URL =
+  (typeof window === "undefined" && process.env.API_INTERNAL_URL) ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://localhost:8080";
 
 export interface AP {
   id: string;

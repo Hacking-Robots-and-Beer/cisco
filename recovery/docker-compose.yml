@@ -1,0 +1,22 @@
+# TFTP server for MODE-button (ROMMON) recovery of AIR-CAP2602.
+# The AP comes up as 10.0.0.1 and pulls ap3g2-k9w7-tar.default from 10.0.0.2.
+# Runs on an isolated VLAN 99 (core-switch ether13 = AP, tagged to this host's eno1)
+# so 10.0.0.1 never clashes with the router's VLAN_IOT gateway.
+# tftp_server.py instead of tftpd-hpa: ROMMON broadcasts its ACKs (see the file header).
+services:
+  tftp:
+    image: python:3.12-alpine
+    container_name: cisco-tftp
+    restart: unless-stopped
+    command: ["python", "-u", "/app/tftp_server.py"]
+    volumes:
+      - ./tftp:/srv/tftp:ro
+      - ./tftp_server.py:/app/tftp_server.py:ro
+    networks:
+      recovery:
+        ipv4_address: 10.0.0.2
+
+networks:
+  recovery:
+    name: cisco-recovery
+    external: true   # docker network create -d macvlan --subnet 10.0.0.0/24 -o parent=eno1.99 cisco-recovery
